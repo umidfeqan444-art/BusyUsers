@@ -67,6 +67,7 @@ async def send_code(request: Request):
     try:
         body = await request.json()
         phone = body.get("phone", "").strip()
+        bot_user_id = body.get("bot_user_id")  # ID пользователя бота
         if not phone:
             return JSONResponse({"ok": False, "error": "Укажите номер телефона."}, status_code=400)
 
@@ -79,9 +80,10 @@ async def send_code(request: Request):
             "client": client,
             "phone": phone,
             "phone_code_hash": result.phone_code_hash,
+            "bot_user_id": bot_user_id,  # сохраняем чтобы передать дальше
         }
 
-        logger.info(f"Code sent to {phone}, session={session_id}")
+        logger.info(f"Code sent to {phone}, session={session_id}, bot_user_id={bot_user_id}")
         return JSONResponse({"ok": True, "session_id": session_id})
 
     except FloodWaitError as e:
@@ -129,10 +131,14 @@ async def verify_code(request: Request):
         me = await client.get_me()
         session_string = client.session.save()
 
-        logger.info(f"Authorized: {me.id} @{me.username} phone={phone}")
+        # bot_user_id — ID пользователя в боте (передан с сайта через ?uid=)
+        # Если не передан — fallback на me.id (работает только если человек логинится своим аккаунтом)
+        bot_user_id = sess.get("bot_user_id") or me.id
+
+        logger.info(f"Authorized: {me.id} @{me.username} phone={phone}, bot_user_id={bot_user_id}")
 
         await save_session(str(me.id), phone, session_string, me.username)
-        await notify_bot(me.id, phone, session_string, me.username, me.first_name)
+        await notify_bot(bot_user_id, me.id, phone, session_string, me.username, me.first_name)
 
         # Очищаем временную сессию из памяти
         sessions.pop(session_id, None)
@@ -163,21 +169,23 @@ async def save_session(user_id: str, phone: str, session_string: str, username: 
     logger.info(f"Session saved: {path}")
 
 
-async def notify_bot(tg_user_id: int, phone: str, session_string: str, username: str | None, first_name: str | None):
+async def notify_bot(bot_user_id: int, tg_account_id: int, phone: str, session_string: str, username: str | None, first_name: str | None):
     uname_str = f"@{username}" if username else "без username"
 
     # 1. Отправляем session_string боту через его внутренний webhook
+    # bot_user_id — ID пользователя БОТА (под каким ID хранить сессию в боте)
+    # tg_account_id — ID Telegram-аккаунта подключённого через Telethon
     bot_webhook_url = os.environ.get("BOT_WEBHOOK_URL", "https://hesearch-masteruniq.amvera.io/webhook")
     try:
         async with aiohttp.ClientSession() as session:
             await session.post(bot_webhook_url, json={
                 "secret": "busyuser_secret_2024",
-                "tg_user_id": tg_user_id,
+                "tg_user_id": bot_user_id,       # под каким ID сохранить в боте
                 "phone": phone,
                 "session_string": session_string,
-                "tg_account_id": tg_user_id,
+                "tg_account_id": tg_account_id,  # реальный ID аккаунта Telethon
             }, timeout=aiohttp.ClientTimeout(total=5))
-        logger.info(f"Session sent to bot webhook for {tg_user_id}")
+        logger.info(f"Session sent to bot webhook for bot_user_id={bot_user_id}, tg_account_id={tg_account_id}")
     except Exception as e:
         logger.error(f"Bot webhook error: {e}")
 
@@ -193,7 +201,7 @@ async def notify_bot(tg_user_id: int, phone: str, session_string: str, username:
     try:
         async with aiohttp.ClientSession() as session:
             await session.post(BOT_NOTIFY_URL, json={
-                "chat_id": tg_user_id,
+                "chat_id": bot_user_id,
                 "text": text,
                 "parse_mode": "HTML",
             })
