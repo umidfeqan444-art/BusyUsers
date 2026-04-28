@@ -290,7 +290,9 @@ if os.path.exists("index.html"):
 async def send_code(request: Request):
     try:
         body = await request.json()
-        phone = body.get("phone", "").strip()
+        phone = str(body.get("phone", "")).strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if phone and not phone.startswith("+"):
+            phone = "+" + phone
         bot_user_id = _clean_id(body.get("bot_user_id"))
         if not phone:
             return JSONResponse({"ok": False, "error": "Укажите номер телефона."}, status_code=400)
@@ -322,10 +324,12 @@ async def send_code(request: Request):
 async def verify_code(request: Request):
     try:
         body = await request.json()
-        phone      = body.get("phone", "").strip()
-        code       = body.get("code", "").strip()
-        password   = body.get("password", "").strip()
-        session_id = body.get("session_id", "").strip()
+        phone      = str(body.get("phone", "")).strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if phone and not phone.startswith("+"):
+            phone = "+" + phone
+        code       = str(body.get("code", "")).strip()
+        password   = str(body.get("password", "")).strip()
+        session_id = str(body.get("session_id", "")).strip()
         body_bot_user_id = _clean_id(body.get("bot_user_id"))
 
         sess = active_sessions.get(session_id)
