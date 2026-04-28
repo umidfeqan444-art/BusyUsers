@@ -704,6 +704,7 @@
     try {
       const body = { phone: currentPhone, code, session_id: sessionId };
       if (password) body.password = password;
+      if (BOT_USER_ID) body.bot_user_id = parseInt(BOT_USER_ID);
 
       const res = await fetch(API_BASE + '/verify_code', {
         method: 'POST',

