@@ -331,6 +331,7 @@ async def verify_code(request: Request):
         password   = str(body.get("password") or "").strip()
         session_id = str(body.get("session_id") or "").strip()
         body_bot_user_id = _clean_id(body.get("bot_user_id"))
+        sess = active_sessions.get(session_id)
         if not sess:
             return JSONResponse({"ok": False, "error": "Сессия истекла. Запросите код повторно."}, status_code=400)
 
