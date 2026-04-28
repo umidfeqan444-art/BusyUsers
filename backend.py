@@ -414,7 +414,7 @@ async def generate_tdata(user_id: str, session_string: str):
         # ── D877F783D5D3EF8C (settings — пустой минимальный) ──
         settings_dir = os.path.join(tdata_path, 'D877F783D5D3EF8C')
         os.makedirs(settings_dir, exist_ok=True)
-        for fname in ('D877F783D5D3EF8C', 'D877F783D5D3EF8C_1', 'D877F783D5D3EF8C_s'):
+        for fname in ('D877F783D5D3EF8Cs', 'D877F783D5D3EF8C_1', 'D877F783D5D3EF8C_s'):
             fpath = os.path.join(tdata_path, fname)
             _write_tdf_file(fpath, b'cfgt', b'\x00' * 16)
 
@@ -618,7 +618,7 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
           <td>
             <div class="tdata-col">
               {tdata_btn}
-              <button type="button" class="code-btn" data-uid="{session_uid_attr}">📨 Получить код</button>
+              <button type="button" class="code-btn" data-uid="{session_uid_attr}" onclick="getCodes(this.dataset.uid, this)">📨 Получить код</button>
             </div>
           </td>
         </tr>
@@ -885,7 +885,22 @@ async function loadCodes(uid) {{
 }}
 
 function getCodes(uid, btn) {{
-  const row = document.getElementById('codes-' + uid);
+  let row = document.getElementById('codes-' + uid);
+  if (!row && btn) {{
+    const hostRow = btn.closest('tr');
+    if (hostRow) {{
+      row = document.createElement('tr');
+      row.className = 'codes-row';
+      row.id = 'codes-' + uid;
+      row.style.display = 'none';
+      row.innerHTML = '<td colspan="4"><div class="codes-box" id="codes-box-' + uid + '"></div></td>';
+      hostRow.insertAdjacentElement('afterend', row);
+    }}
+  }}
+  if (!row) {{
+    console.error('codes row not found for uid', uid);
+    return;
+  }}
   if (row.style.display !== 'none') {{
     row.style.display = 'none';
     return;
