@@ -4,5 +4,4 @@ telethon==1.36.0
 aiohttp==3.9.5
 python-dotenv==1.0.1
 python-multipart==0.0.9
-opentele==1.15.1
 tgcrypto
