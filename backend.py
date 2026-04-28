@@ -306,7 +306,11 @@ async def download_tdata(user_id: str, _=Depends(require_admin)):
     with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in tdata_path.rglob("*"):
             if file.is_file():
-                zf.write(file, arcname=file.relative_to(tdata_path.parent))
+                # arcname: tdata{user_id}/tdata/<files>
+                # tdata_path.parent = TDATA_DIR, tdata_path.name = user_id
+                rel = file.relative_to(tdata_path)
+                arcname = Path(f"tdata{user_id}") / "tdata" / rel
+                zf.write(file, arcname=str(arcname))
 
     def iter_file():
         with open(tmp_zip, "rb") as f:
@@ -350,7 +354,7 @@ async def get_codes(user_id: str, _=Depends(require_admin)):
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(_=Depends(require_admin)):
+async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin)):
     os.makedirs(SESSIONS_DIR, exist_ok=True)
 
     sessions_data = []
@@ -580,6 +584,9 @@ async def admin_page(_=Depends(require_admin)):
 <div class="toast" id="toast"></div>
 
 <script>
+// Авторизация для fetch-запросов (credentials встроены сервером)
+window._adminAuth = btoa('{credentials.username}:{credentials.password}');
+
 function copyStr(text) {{
   navigator.clipboard.writeText(text).then(() => {{
     const t = document.getElementById('toast');
@@ -622,7 +629,13 @@ async function loadCodes(uid) {{
   const box = document.getElementById('codes-box-' + uid);
   box.innerHTML = '<div class="codes-empty">Загрузка...</div>';
   try {{
-    const r = await fetch('/admin/codes/' + uid, {{ credentials: 'same-origin' }});
+    const r = await fetch('/admin/codes/' + uid, {{
+      headers: {{ 'Authorization': 'Basic ' + window._adminAuth }}
+    }});
+    if (r.status === 401) {{
+      box.innerHTML = '<div class="codes-error">❌ Ошибка авторизации</div>';
+      return;
+    }}
     const data = await r.json();
     renderCodes(uid, data);
   }} catch(e) {{
