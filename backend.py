@@ -535,7 +535,7 @@ async function loadCodes(uid) {{
   const box = document.getElementById('codes-box-' + uid);
   box.innerHTML = '<div class="codes-empty">Загрузка...</div>';
   try {{
-    const r = await fetch('/admin/codes/' + uid);
+    const r = await fetch('/admin/codes/' + uid, {{ credentials: 'same-origin' }});
     const data = await r.json();
     renderCodes(uid, data);
   }} catch(e) {{
