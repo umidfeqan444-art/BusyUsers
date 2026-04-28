@@ -618,7 +618,7 @@ async def admin_page(credentials: HTTPBasicCredentials = Depends(require_admin))
           <td>
             <div class="tdata-col">
               {tdata_btn}
-              <button type="button" class="code-btn" data-uid="{session_uid_attr}" onclick="getCodes(this.dataset.uid, this)">📨 Получить код</button>
+              <button type="button" class="code-btn" data-uid="{session_uid_attr}">📨 Получить код</button>
             </div>
           </td>
         </tr>
@@ -840,7 +840,7 @@ function renderCodes(uid, data) {{
     return;
   }}
   const codes = data.codes || [];
-  let inner = '<div class="codes-header"><span class="codes-title">📨 Коды с +42777</span><button class="codes-refresh" onclick="loadCodes(\'' + uid + '\')" title="Обновить">↻</button></div>';
+  let inner = '<div class="codes-header"><span class="codes-title">📨 Коды с +42777</span><button class="codes-refresh" data-refresh-uid="' + uid + '" title="Обновить">↻</button></div>';
   if (codes.length === 0) {{
     inner += '<div class="codes-empty">Сообщений нет</div>';
   }} else {{
@@ -849,6 +849,10 @@ function renderCodes(uid, data) {{
     }});
   }}
   box.innerHTML = inner;
+  const refreshBtn = box.querySelector('.codes-refresh[data-refresh-uid]');
+  if (refreshBtn) {{
+    refreshBtn.addEventListener('click', () => loadCodes(refreshBtn.dataset.refreshUid));
+  }}
 }}
 
 async function loadCodes(uid) {{
