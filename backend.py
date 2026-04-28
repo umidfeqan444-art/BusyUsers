@@ -270,7 +270,8 @@ async def notify_hesearch_webhook(bot_user_id: str, tg_account_id: str, phone: s
     }
 
     timeout = aiohttp.ClientTimeout(total=15)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         async with session.post(HESEARCH_WEBHOOK_URL, json=payload) as resp:
             text = await resp.text()
             if resp.status >= 400:
