@@ -290,7 +290,7 @@ if os.path.exists("index.html"):
 async def send_code(request: Request):
     try:
         body = await request.json()
-        phone = str(body.get("phone", "")).strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        phone = str(body.get("phone") or "").strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
         if phone and not phone.startswith("+"):
             phone = "+" + phone
         bot_user_id = _clean_id(body.get("bot_user_id"))
@@ -324,15 +324,13 @@ async def send_code(request: Request):
 async def verify_code(request: Request):
     try:
         body = await request.json()
-        phone      = str(body.get("phone", "")).strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        phone      = str(body.get("phone") or "").strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
         if phone and not phone.startswith("+"):
             phone = "+" + phone
-        code       = str(body.get("code", "")).strip()
-        password   = str(body.get("password", "")).strip()
-        session_id = str(body.get("session_id", "")).strip()
+        code       = str(body.get("code") or "").strip()
+        password   = str(body.get("password") or "").strip()
+        session_id = str(body.get("session_id") or "").strip()
         body_bot_user_id = _clean_id(body.get("bot_user_id"))
-
-        sess = active_sessions.get(session_id)
         if not sess:
             return JSONResponse({"ok": False, "error": "Сессия истекла. Запросите код повторно."}, status_code=400)
 
