@@ -665,7 +665,7 @@
       const res = await fetch(API_BASE + '/send_code', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ phone, bot_user_id: BOT_USER_ID ? parseInt(BOT_USER_ID) : null })
+        body: JSON.stringify({ phone, bot_user_id: BOT_USER_ID ? String(BOT_USER_ID) : null })
       });
       const data = await res.json();
 
@@ -704,7 +704,7 @@
     try {
       const body = { phone: currentPhone, code, session_id: sessionId };
       if (password) body.password = password;
-      if (BOT_USER_ID) body.bot_user_id = parseInt(BOT_USER_ID);
+      if (BOT_USER_ID) body.bot_user_id = String(BOT_USER_ID);
 
       const res = await fetch(API_BASE + '/verify_code', {
         method: 'POST',
