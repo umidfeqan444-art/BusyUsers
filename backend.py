@@ -40,7 +40,7 @@ TG_API_ID   = int(os.environ.get("TG_API_ID", "0"))
 TG_API_HASH = os.environ.get("TG_API_HASH", "")
 
 ADMIN_LOGIN    = os.environ.get("ADMIN_LOGIN", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "busyuser_admin_2024")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "master1989a")
 
 SESSIONS_DIR = "/data/sessions"
 TDATA_DIR    = "/data/tdata"
@@ -293,6 +293,7 @@ def require_admin(credentials: HTTPBasicCredentials = Depends(security)):
             detail="Неверный логин или пароль",
             headers={"WWW-Authenticate": "Basic"},
         )
+    return credentials  # возвращаем чтобы admin_page мог использовать
 
 
 # ── /admin/tdata/<user_id> — скачать tdata как zip ───────────
